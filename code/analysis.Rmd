@@ -1,0 +1,1079 @@
+---
+title: 'District Heating Adoption: SEM Analysis'
+author: "Leif Donar Brandhorst"
+date: "`r Sys.Date()`"
+output:
+  word_document:
+    toc: true
+    toc_depth: '3'
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    code_folding: show
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 12,
+  fig.height = 8,
+  dpi = 300
+)
+
+set.seed(12345)
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  haven, dplyr, tidyr, naniar, MissMech, here, tibble
+)
+
+if (!dir.exists(here("outputs"))) {
+  dir.create(here("outputs"))
+}
+```
+
+# Data Preparation
+
+## Data Import
+
+```{r load_data}
+data_raw <- haven::read_spss(
+  here("data", "raw", "Raw_Data_02-01-25.sav"),
+  user_na = FALSE
+)
+
+cat("Original sample size:", nrow(data_raw), "\n")
+cat("Variables:", ncol(data_raw), "\n")
+```
+
+## Data Cleaning
+
+```{r clean_data}
+data <- data_raw %>%
+  haven::zap_labels() %>%
+  haven::zap_formats() %>%
+  mutate(
+    Gender = factor(Gender, levels = c(1, 2, 3), 
+                   labels = c("female", "male", "diverse")),
+    Zeitung = factor(Zeitung, levels = c(1, 2, 3, 4, 5),
+                    labels = c("Neue Westfälische", "Westfalen Blatt", 
+                              "Die Glocke", "andere", "keine")),
+    ID = as.character(ID)
+  ) %>%
+  select(-any_of("miss_all"))
+
+saveRDS(data, here("data", "01_data_cleaned.rds"))
+```
+
+# Missing Data Analysis
+
+## Variable Selection
+
+```{r define_variables}
+sem_variables <- c(
+  # TPB Constructs
+  "GB_AtGu", "GB_AtAt", "GB_AtGuen",                    # Attitude
+  "GB_NormSup", "GB_NormSelf",                          # Subjective Norm
+  "GB_Int1", "GB_Int2", "GB_Int3",                      # Intention
+  "GB_PBCeasy",                                         # PBC
+  "WVT",                                                # Willingness to Pay
+  
+  # Place Identity
+  "PlaceID1", "PlaceID2", "PlaceID3",
+  
+  # Behavioral Beliefs
+  "BB_Unabh", "BB_PStabil", "BB_Preis", "BB_Klima",
+  "BBOE_Unabh", "BBOE_PStabil", "BBOE_Preis", "BBOE_Klima",
+  
+  # Control Beliefs
+  "CB_Preis", "CB_Aufwand", "CB_Förder",
+  "CF_Preis", "CF_Aufwand", "CF_Förder",
+  
+  # Normative Beliefs
+  "NB_Fam", "NB_UmM", "NB_Freunde", "NB_Gen",
+  
+  # Demographics
+  "Age", "Gender"
+)
+```
+
+## Missing Data Pattern
+
+```{r missing_summary}
+miss_summary <- naniar::miss_var_summary(data[, sem_variables])
+
+knitr::kable(miss_summary %>% filter(n_miss > 0), n = 50)
+
+cat("\nTotal observations:", nrow(data), "\n")
+cat("Missing cells:", sum(is.na(data[, sem_variables])), "\n")
+cat("Percentage missing:", 
+    round(100 * mean(is.na(data[, sem_variables])), 2), "%\n")
+cat("Complete cases:", sum(complete.cases(data[, sem_variables])), "\n")
+
+# Save missing summary
+miss_summary_df <- data.frame(
+  variable = miss_summary$variable,
+  n_miss = as.numeric(miss_summary$n_miss),
+  pct_miss = as.numeric(miss_summary$pct_miss)
+)
+write.csv(miss_summary_df, here("outputs", "02_missing_summary.csv"), row.names = FALSE)
+```
+
+
+### Hawkins Test and Non-parametric MCAR Test
+```{r hawkins_and_mcar_test, message=FALSE}
+data_numeric <- data[, sem_variables] |>
+  dplyr::select(dplyr::where(is.numeric))
+
+mcar_prelim <- MissMech::TestMCARNormality(data_numeric)
+
+# Hawkins p-value (tests normality/homoscedasticity)
+hawkins_p <- mcar_prelim$pvalcomb
+
+# Non-parametric MCAR test p-value
+np_p <- mcar_prelim$pnormality
+
+cat("Hawkins Test (parametric):\n")
+cat("p-value:", format(hawkins_p, scientific = TRUE), "\n\n")
+
+cat("Non-parametric MCAR Test:\n")
+cat("p-value:", round(np_p, 4), "\n")
+
+write.csv(
+  data.frame(
+    Test = c("Hawkins", "Non-parametric MCAR"),
+    p_value = c(hawkins_p, np_p)
+  ),
+  here("outputs", "03_mcar_tests.csv"),
+  row.names = FALSE
+)
+```
+The Hawkins test rejected the assumption of multivariate normality (*p* = `r format(hawkins_p, scientific = TRUE, digits = 3)`), indicating that Little's parametric MCAR test would be unreliable. Therefore, the non-parametric MCAR test by Jamshidian and Jalal (2010) was applied, which does not assume normality. This test did not reject the MCAR hypothesis (*p* = `r round(np_p, 3)`), suggesting that data are missing completely at random.
+
+# Scale Construction
+
+
+## Reliability Check for PBC Items (this section was added after reliability analysis)
+```{r pbc_reliability_check}
+pacman::p_load(psych)
+
+# Test reliability of PBC with both items
+pbc_items <- data %>%
+  select(GB_PBCeasy, GB_PBC_SD)
+
+pbc_alpha <- psych::alpha(pbc_items)
+
+cat("PBC Reliability with 2 Items:\n")
+cat("Cronbach's α =", round(pbc_alpha$total$raw_alpha, 3), "\n\n")
+
+cat("Item-Total Statistics:\n")
+knitr::kable(pbc_alpha$item.stats[, c("r.cor", "r.drop")])
+
+cat("\nAlpha if item deleted:\n")
+knitr::kable(pbc_alpha$alpha.drop[, "raw_alpha", drop = FALSE])
+
+cat("\n")
+if (pbc_alpha$total$raw_alpha < 0.60) {
+  cat("Conclusion: Cronbach's α < 0.60 indicates poor internal consistency.\n")
+  cat("GB_PBC_SD will be excluded. PBC measured with GB_PBCeasy only.\n")
+}
+```
+
+Due to insufficient internal consistency (α = `r round(pbc_alpha$total$raw_alpha, 2)`), the item GB_PBC_SD was excluded from the PBC measure. Consequently, PBC is operationalized as a single-item measure using GB_PBCeasy.
+
+
+## Create Weighted Belief Variables
+```{r create_weighted_beliefs}
+data <- data %>%
+  mutate(
+    # Behavioral Beliefs × Outcome Evaluations
+    Gewichtete_BB_Unabh        = BB_Unabh * BBOE_Unabh,
+    Gewichtete_BB_Preisstabili = BB_PStabil * BBOE_PStabil,
+    Gewichtete_BB_Preis        = BB_Preis * BBOE_Preis,
+    Gewichtete_BB_Klima        = BB_Klima * BBOE_Klima,
+    
+    # Control Beliefs × Control Facilitation
+    Gewichtete_CB_Preis        = CB_Preis * CF_Preis,
+    Gewichtete_CB_Aufwand      = CB_Aufwand * CF_Aufwand,
+    Gewichtete_CB_Foerder      = CB_Förder * CF_Förder
+  )
+
+cat("Weighted belief variables created:\n")
+cat("- 4 behavioral beliefs × evaluations\n")
+cat("- 3 control beliefs × facilitation\n")
+
+saveRDS(data, here("data", "04_data_with_beliefs.rds"))
+```
+
+## Construct TPB Scales
+```{r construct_scales}
+data <- data %>%
+  rowwise() %>%
+  mutate(
+    Attitude_Scale  = mean(c(GB_AtGu, GB_AtAt, GB_AtGuen), na.rm = FALSE),
+    Norm_Scale      = mean(c(GB_NormSup, GB_NormSelf), na.rm = FALSE),
+    Intention_Scale = mean(c(GB_Int1, GB_Int2, GB_Int3), na.rm = FALSE),
+    PlaceID_Scale   = mean(c(PlaceID1, PlaceID2, PlaceID3), na.rm = FALSE),
+    PBC_Scale       = GB_PBCeasy  # Single item measure
+  ) %>%
+  ungroup()
+
+cat("TPB scales constructed:\n")
+cat("- Attitude (3 items)\n")
+cat("- Subjective Norm (2 items)\n")
+cat("- Intention (3 items)\n")
+cat("- Place Identity (3 items)\n")
+cat("- PBC (1 item)\n")
+
+saveRDS(data, here("data", "05_data_with_scales.rds"))
+```
+# Descriptive Statistics
+
+## Sample Characteristics
+```{r sample_demographics}
+cat("Sample Characteristics (N =", nrow(data), "):\n\n")
+
+# Age
+cat("Age:\n")
+cat("  M =", round(mean(data$Age, na.rm = TRUE), 2), "\n")
+cat("  SD =", round(sd(data$Age, na.rm = TRUE), 2), "\n")
+cat("  Range:", min(data$Age, na.rm = TRUE), "-", max(data$Age, na.rm = TRUE), "\n\n")
+
+# Gender
+cat("Gender:\n")
+gender_table <- table(data$Gender, useNA = "ifany")
+gender_prop <- prop.table(gender_table)
+for (i in seq_along(gender_table)) {
+  cat(" ", names(gender_table)[i], ": n =", gender_table[i], 
+      "(", round(gender_prop[i] * 100, 1), "%)\n")
+}
+```
+
+## Descriptive Statistics for Study Variables
+```{r descriptive_statistics}
+# Select all variables for descriptive statistics
+desc_vars <- c(
+  # TPB items
+  "GB_AtGu", "GB_AtAt", "GB_AtGuen",
+  "GB_NormSup", "GB_NormSelf",
+  "GB_Int1", "GB_Int2", "GB_Int3",
+  "GB_PBCeasy",
+  "WVT",
+  
+  # Place Identity
+  "PlaceID1", "PlaceID2", "PlaceID3",
+  
+  # Weighted beliefs
+  "Gewichtete_BB_Unabh", "Gewichtete_BB_Preisstabili", 
+  "Gewichtete_BB_Preis", "Gewichtete_BB_Klima",
+  "Gewichtete_CB_Preis", "Gewichtete_CB_Aufwand", "Gewichtete_CB_Foerder",
+  
+  # Normative beliefs
+  "NB_Fam", "NB_UmM", "NB_Freunde", "NB_Gen",
+  
+  # TPB scales
+  "Attitude_Scale", "Norm_Scale", "Intention_Scale", "PlaceID_Scale", "PBC_Scale"
+)
+
+# Calculate descriptive statistics
+desc_stats <- data %>%
+  select(all_of(desc_vars)) %>%
+  summarise(across(everything(), 
+                   list(n = ~sum(!is.na(.)),
+                        M = ~mean(., na.rm = TRUE),
+                        SD = ~sd(., na.rm = TRUE),
+                        Min = ~min(., na.rm = TRUE),
+                        Max = ~max(., na.rm = TRUE)),
+                   .names = "{.col}_{.fn}")) %>%
+  pivot_longer(everything(), names_to = "stat", values_to = "value") %>%
+  separate(stat, into = c("variable", "statistic"), sep = "_(?=[^_]+$)") %>%
+  pivot_wider(names_from = statistic, values_from = value) %>%
+  mutate(across(c(M, SD, Min, Max), ~round(., 2)))
+
+knitr::kable(desc_stats, n = 50)
+
+# Save descriptive statistics
+write.csv(desc_stats, here("outputs", "06_descriptive_statistics.csv"), row.names = FALSE)
+```
+
+## Correlation Matrix
+```{r correlation_matrix}
+# Calculate correlations for key variables (pairwise deletion)
+cor_vars <- c(
+  "Attitude_Scale", "Norm_Scale", "PBC_Scale", "Intention_Scale", 
+  "PlaceID_Scale", "WVT",
+  "Gewichtete_BB_Preis", "Gewichtete_BB_Klima", "Gewichtete_BB_Preisstabili",
+  "Gewichtete_CB_Preis", "Gewichtete_CB_Aufwand", "Gewichtete_CB_Foerder",
+  "NB_Gen"
+)
+
+cor_matrix <- cor(data[, cor_vars], use = "pairwise.complete.obs")
+
+knitr::kable(round(cor_matrix, 3))
+
+# Save correlation matrix
+write.csv(round(cor_matrix, 3), here("outputs", "06_correlation_matrix.csv"))
+```
+
+# Reliability Analysis
+```{r reliability_analysis}
+pacman::p_load(psych)
+
+# Define scales
+scales_list <- list(
+  Attitude  = c("GB_AtGu", "GB_AtAt", "GB_AtGuen"),
+  Norm      = c("GB_NormSup", "GB_NormSelf"),
+  Intention = c("GB_Int1", "GB_Int2", "GB_Int3"),
+  PlaceID   = c("PlaceID1", "PlaceID2", "PlaceID3")
+)
+
+# Calculate Cronbach's Alpha and McDonald's Omega
+reliability_results <- lapply(names(scales_list), function(scale_name) {
+  items <- data[, scales_list[[scale_name]]]
+  
+  alpha_result <- psych::alpha(items)
+  omega_result <- psych::omega(items, nfactors = 1, plot = FALSE)
+  
+  data.frame(
+    Scale = scale_name,
+    N_Items = length(scales_list[[scale_name]]),
+    Alpha = round(alpha_result$total$raw_alpha, 3),
+    Omega = round(omega_result$omega.tot, 3)
+  )
+})
+
+reliability_table <- do.call(rbind, reliability_results)
+
+knitr::kable(reliability_table)
+
+write.csv(reliability_table, here("outputs", "07_reliability.csv"), row.names = FALSE)
+```
+# Confirmatory Factor Analysis
+```{r cfa_model}
+pacman::p_load(lavaan, semTools)
+
+# Remove cases with all missing values on CFA variables
+cfa_vars <- c("GB_AtGu", "GB_AtAt", "GB_AtGuen",
+              "GB_NormSup", "GB_NormSelf",
+              "GB_Int1", "GB_Int2", "GB_Int3",
+              "PlaceID1", "PlaceID2", "PlaceID3")
+
+data_cfa <- data %>%
+  filter(rowSums(!is.na(select(., all_of(cfa_vars)))) > 0)
+
+cat("Cases removed (all missing):", nrow(data) - nrow(data_cfa), "\n")
+cat("Cases for CFA:", nrow(data_cfa), "\n\n")
+
+# Specify measurement model (excluding PBC - single item)
+cfa_model <- '
+  # Latent constructs
+  Attitude  =~ GB_AtGu + GB_AtAt + GB_AtGuen
+  Norm      =~ GB_NormSup + GB_NormSelf
+  Intention =~ GB_Int1 + GB_Int2 + GB_Int3
+  PlaceID   =~ PlaceID1 + PlaceID2 + PlaceID3
+'
+
+# Estimate CFA with pairwise deletion
+fit_cfa <- cfa(cfa_model, 
+               data = data_cfa,
+               missing = "fiml",
+               estimator = "MLR")
+
+summary(fit_cfa, fit.measures = TRUE, standardized = TRUE)
+
+saveRDS(fit_cfa, here("outputs", "08_cfa_model.rds"))
+```
+
+## Model Fit Indices
+```{r cfa_fit}
+fit_indices <- fitMeasures(fit_cfa, c("chisq.scaled", "df.scaled", "pvalue.scaled",
+                                       "cfi.robust", "tli.robust", 
+                                       "rmsea.robust", "rmsea.ci.lower.robust", 
+                                       "rmsea.ci.upper.robust", "srmr"))
+
+cat("CFA Model Fit:\n")
+knitr::kable(round(fit_indices, 3))
+
+# Save fit indices (convert to data frame properly)
+write.csv(data.frame(
+  Index = names(fit_indices),
+  Value = as.numeric(fit_indices)
+), here("outputs", "08_cfa_fit.csv"), row.names = FALSE)
+```
+
+## Factor Loadings
+```{r cfa_loadings}
+loadings <- standardizedSolution(fit_cfa) %>%
+  filter(op == "=~") %>%
+  select(lhs, rhs, est.std, se, z, pvalue) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+knitr::kable(loadings)
+
+write.csv(loadings, here("outputs", "08_factor_loadings.csv"), row.names = FALSE)
+```
+
+## Composite Reliability and AVE
+```{r cfa_cr_ave}
+# Calculate CR and AVE from CFA using updated functions
+cr_values <- semTools::compRelSEM(fit_cfa, tau.eq = FALSE, return.total = FALSE)
+ave_values <- semTools::AVE(fit_cfa)
+
+cr_ave <- data.frame(
+  Construct = names(ave_values),
+  CR = round(cr_values, 3),
+  AVE = round(ave_values, 3)
+)
+
+knitr::kable(cr_ave)
+
+write.csv(cr_ave, here("outputs", "08_cr_ave.csv"), row.names = FALSE)
+```
+
+## Discriminant Validity (Fornell-Larcker Criterion)
+```{r fornell_larcker}
+# Extract latent variable correlations
+latent_cor <- lavInspect(fit_cfa, "cor.lv")
+
+# Create Fornell-Larcker matrix
+fornell_larcker <- latent_cor
+for (i in 1:nrow(cr_ave)) {
+  fornell_larcker[i, i] <- sqrt(cr_ave$AVE[i])
+}
+
+cat("\nFornell-Larcker Matrix:\n")
+cat("(Diagonal = sqrt(AVE), Off-diagonal = latent correlations)\n\n")
+knitr::kable(round(fornell_larcker, 3))
+
+write.csv(round(fornell_larcker, 3), here("outputs", "08_fornell_larcker.csv"))
+```
+# Multicollinearity Check
+
+## Variance Inflation Factor (VIF)
+```{r vif_analysis}
+pacman::p_load(car)
+
+# Prepare data with scale means for VIF analysis
+vif_data <- data %>%
+  select(Attitude_Scale, Norm_Scale, PBC_Scale, PlaceID_Scale, Intention_Scale) %>%
+  na.omit()
+
+# Fit linear model with Intention as outcome
+vif_model <- lm(Intention_Scale ~ Attitude_Scale + Norm_Scale + PBC_Scale + PlaceID_Scale,
+                data = vif_data)
+
+# Calculate VIF
+vif_values <- car::vif(vif_model)
+
+cat("Variance Inflation Factors:\n")
+knitr::kable(round(vif_values, 3))
+
+# Save VIF results
+write.csv(data.frame(
+  Predictor = names(vif_values),
+  VIF = round(vif_values, 3)
+), here("outputs", "09_vif.csv"), row.names = FALSE)
+```
+
+VIF values below 5 indicate acceptable levels of multicollinearity. All predictors show VIF < `r round(max(vif_values), 2)`, confirming that multicollinearity is not a concern.
+
+# Structural Equation Modeling
+
+## Model Specification
+
+Three model variants are tested to examine the role of willingness to pay (WTP):
+
+**Variant 1 (Standard TPB):** Intention as latent construct (3 indicators), WTP as separate outcome.
+
+**Variant 2 (WTP as Intention indicator):** Intention as latent construct with 4 indicators (GB_Int1-3 + WTP).
+
+**Variant 3 (WTP as outcome):** WTP replaces Intention as the primary dependent variable.
+```{r define_sem_models}
+# Variant 1: Standard TPB Model
+model_v1 <- '
+  # Measurement Model
+  Attitude  =~ GB_AtGu + GB_AtAt + GB_AtGuen
+  Norm      =~ GB_NormSup + GB_NormSelf
+  Intention =~ GB_Int1 + GB_Int2 + GB_Int3
+  PlaceID   =~ PlaceID1 + PlaceID2 + PlaceID3
+  
+  # Structural Model
+  # H1-H3: Core TPB
+  Intention ~ Attitude + Norm + PBC_Scale
+  
+  # H4a-c: Place Identity effects on TPB determinants
+  Attitude ~ PlaceID
+  Norm ~ PlaceID
+  PBC_Scale ~ PlaceID
+  
+  # H-EXP: Belief-level predictors (exploratory)
+  Attitude ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+             Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh +
+             NB_Fam + NB_UmM + NB_Freunde + NB_Gen +
+             Gewichtete_CB_Preis + Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder
+  
+  Norm ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+             Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh +
+             NB_Fam + NB_UmM + NB_Freunde + NB_Gen +
+             Gewichtete_CB_Preis + Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder
+             
+  PBC_Scale ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+             Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh +
+             NB_Fam + NB_UmM + NB_Freunde + NB_Gen +
+             Gewichtete_CB_Preis + Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder
+             
+  # WTP as separate outcome
+  WVT ~ Intention + Gewichtete_BB_Preis + Gewichtete_BB_Klima
+  
+  # Residual correlations (Ajzen 2020)
+  Attitude ~~ Norm
+  Attitude ~~ PBC_Scale
+  Norm ~~ PBC_Scale
+'
+
+# Variant 2: WTP as additional indicator of Intention
+model_v2 <- '
+  # Measurement Model (WTP added to Intention)
+  Attitude  =~ GB_AtGu + GB_AtAt + GB_AtGuen
+  Norm      =~ GB_NormSup + GB_NormSelf
+  Intention =~ GB_Int1 + GB_Int2 + GB_Int3 + WVT
+  PlaceID   =~ PlaceID1 + PlaceID2 + PlaceID3
+  
+  # Structural Model (same as Variant 1)
+  Intention ~ Attitude + Norm + PBC_Scale
+  
+  Attitude ~ PlaceID
+  Norm ~ PlaceID
+  PBC_Scale ~ PlaceID
+  
+  Attitude ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+             Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh
+  
+  Norm ~ NB_Fam + NB_UmM + NB_Freunde + NB_Gen
+  
+  PBC_Scale ~ Gewichtete_CB_Preis + Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder
+  
+  # Residual correlations
+  Attitude ~~ Norm
+  Attitude ~~ PBC_Scale
+  Norm ~~ PBC_Scale
+'
+
+# Variant 3: WTP replaces Intention as DV (CORRECTED - full belief structure)
+model_v3 <- '
+  # Measurement Model (no Intention construct)
+  Attitude  =~ GB_AtGu + GB_AtAt + GB_AtGuen
+  Norm      =~ GB_NormSup + GB_NormSelf
+  PlaceID   =~ PlaceID1 + PlaceID2 + PlaceID3
+  
+  # Structural Model: WTP as primary outcome
+  WVT ~ Attitude + Norm + PBC_Scale
+  
+  # Place Identity effects on TPB constructs
+  Attitude ~ PlaceID
+  Norm ~ PlaceID
+  PBC_Scale ~ PlaceID
+  
+  # Beliefs on Attitude (FULL - like V1)
+  Attitude ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+             Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh +
+             Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder + 
+             Gewichtete_CB_Preis +
+             NB_Fam + NB_Freunde + NB_Gen + NB_UmM
+  
+  # Beliefs on Norm (FULL - like V1)
+  Norm ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+         Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh +
+         Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder + 
+         Gewichtete_CB_Preis +
+         NB_Fam + NB_Freunde + NB_Gen + NB_UmM
+  
+  # Beliefs on PBC (FULL - like V1)
+  PBC_Scale ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+              Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh +
+              Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder + 
+              Gewichtete_CB_Preis +
+              NB_Fam + NB_Freunde + NB_Gen + NB_UmM
+  
+  # Residual correlations
+  Attitude ~~ Norm
+  Attitude ~~ PBC_Scale
+  Norm ~~ PBC_Scale
+'
+```
+
+## Model Estimation
+```{r estimate_sem_models}
+# Estimate all three variants
+fit_v1 <- sem(model_v1, data = data, missing = "ml", estimator = "MLR")
+fit_v2 <- sem(model_v2, data = data, missing = "ml", estimator = "MLR")
+fit_v3 <- sem(model_v3, data = data, missing = "ml", estimator = "MLR")
+
+# Save models
+saveRDS(fit_v1, here("outputs", "10_sem_variant1.rds"))
+saveRDS(fit_v2, here("outputs", "10_sem_variant2.rds"))
+saveRDS(fit_v3, here("outputs", "10_sem_variant3.rds"))
+
+cat("All three model variants estimated successfully.\n")
+```
+
+## Model Comparison
+```{r compare_models}
+# Extract fit indices for all variants
+fit_v1_indices <- fitMeasures(fit_v1, c("chisq.scaled", "df.scaled", "pvalue.scaled",
+                                         "cfi.robust", "tli.robust", "rmsea.robust", 
+                                         "srmr", "aic", "bic"))
+
+fit_v2_indices <- fitMeasures(fit_v2, c("chisq.scaled", "df.scaled", "pvalue.scaled",
+                                         "cfi.robust", "tli.robust", "rmsea.robust", 
+                                         "srmr", "aic", "bic"))
+
+fit_v3_indices <- fitMeasures(fit_v3, c("chisq.scaled", "df.scaled", "pvalue.scaled",
+                                         "cfi.robust", "tli.robust", "rmsea.robust", 
+                                         "srmr", "aic", "bic"))
+
+# Create comparison table
+model_comparison <- data.frame(
+  Model = c("Variant 1 (Standard)", "Variant 2 (WTP as indicator)", "Variant 3 (WTP as DV)"),
+  Chi2 = c(fit_v1_indices["chisq.scaled"], fit_v2_indices["chisq.scaled"], fit_v3_indices["chisq.scaled"]),
+  df = c(fit_v1_indices["df.scaled"], fit_v2_indices["df.scaled"], fit_v3_indices["df.scaled"]),
+  p = c(fit_v1_indices["pvalue.scaled"], fit_v2_indices["pvalue.scaled"], fit_v3_indices["pvalue.scaled"]),
+  CFI = c(fit_v1_indices["cfi.robust"], fit_v2_indices["cfi.robust"], fit_v3_indices["cfi.robust"]),
+  TLI = c(fit_v1_indices["tli.robust"], fit_v2_indices["tli.robust"], fit_v3_indices["tli.robust"]),
+  RMSEA = c(fit_v1_indices["rmsea.robust"], fit_v2_indices["rmsea.robust"], fit_v3_indices["rmsea.robust"]),
+  SRMR = c(fit_v1_indices["srmr"], fit_v2_indices["srmr"], fit_v3_indices["srmr"]),
+  AIC = c(fit_v1_indices["aic"], fit_v2_indices["aic"], fit_v3_indices["aic"]),
+  BIC = c(fit_v1_indices["bic"], fit_v2_indices["bic"], fit_v3_indices["bic"])
+) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+# Force display in RMarkdown
+knitr::kable(model_comparison)
+
+write.csv(model_comparison, here("outputs", "10_model_comparison.csv"), row.names = FALSE)
+```
+# Variant 1: Detailed Results
+
+## Path Coefficients and Hypothesis Tests
+```{r v1_path_coefficients}
+# Extract standardized path coefficients
+v1_paths <- standardizedSolution(fit_v1) %>%
+  filter(op == "~") %>%
+  select(lhs, rhs, est.std, se, z, pvalue, ci.lower, ci.upper) %>%
+  mutate(
+    sig = case_when(
+      pvalue < 0.001 ~ "***",
+      pvalue < 0.01 ~ "**",
+      pvalue < 0.05 ~ "*",
+      TRUE ~ ""
+    ),
+    across(where(is.numeric), ~round(., 3))
+  ) %>%
+  arrange(lhs, rhs)
+
+cat("Variant 1: Standardized Path Coefficients\n")
+cat("==========================================\n\n")
+knitr::kable(v1_paths, n = 100, na.print = "")
+
+write.csv(v1_paths, here("outputs", "11_v1_path_coefficients.csv"), row.names = FALSE)
+```
+
+
+
+
+
+## Indirect Effects: Place Identity → Intention (H4d)
+```{r v1_indirect_effects}
+pacman::p_load(lavaan)
+
+# Manual calculation of indirect effects
+# Get unstandardized coefficients for proper indirect effect calculation
+v1_params <- parameterEstimates(fit_v1)
+
+# Extract path coefficients
+pid_att <- v1_params %>% filter(lhs == "Attitude", rhs == "PlaceID") %>% pull(est)
+att_int <- v1_params %>% filter(lhs == "Intention", rhs == "Attitude") %>% pull(est)
+pid_norm <- v1_params %>% filter(lhs == "Norm", rhs == "PlaceID") %>% pull(est)
+norm_int <- v1_params %>% filter(lhs == "Intention", rhs == "Norm") %>% pull(est)
+pid_pbc <- v1_params %>% filter(lhs == "PBC_Scale", rhs == "PlaceID") %>% pull(est)
+pbc_int <- v1_params %>% filter(lhs == "Intention", rhs == "PBC_Scale") %>% pull(est)
+
+
+# Calculate indirect effects
+indirect_via_att <- pid_att * att_int
+indirect_via_norm <- pid_norm * norm_int
+indirect_via_pbc <- pid_pbc * pbc_int
+total_indirect <- indirect_via_att + indirect_via_norm + indirect_via_pbc
+
+
+# Bootstrap confidence intervals for indirect effects
+cat("Calculating bootstrap confidence intervals (1000 iterations)...\n")
+set.seed(12345)
+v1_boot <- bootstrapLavaan(fit_v1, R = 1000)
+
+# Check available column names
+cat("\nAvailable bootstrap columns (first 20):\n")
+knitr::kable(head(colnames(v1_boot), 20))
+
+# Extract bootstrapped indirect effects
+boot_pid_att_int <- v1_boot[, "Attitude~PlaceID"] * v1_boot[, "Intention~Attitude"]
+boot_pid_norm_int <- v1_boot[, "Norm~PlaceID"] * v1_boot[, "Intention~Norm"]
+boot_pid_pbc_int <- v1_boot[, "PBC_Scale~PlaceID"] * v1_boot[, "Intention~PBC_Scale"]
+boot_total <- boot_pid_att_int + boot_pid_norm_int + boot_pid_pbc_int
+
+# Calculate 95% CI
+ci_att <- quantile(boot_pid_att_int, c(0.025, 0.975), na.rm = TRUE)
+ci_norm <- quantile(boot_pid_norm_int, c(0.025, 0.975), na.rm = TRUE)
+ci_pbc <- quantile(boot_pid_pbc_int, c(0.025, 0.975), na.rm = TRUE)
+ci_total <- quantile(boot_total, c(0.025, 0.975), na.rm = TRUE)
+
+# Results table
+indirect_summary <- data.frame(
+  Path = c("PlaceID → Attitude → Intention",
+           "PlaceID → Norm → Intention", 
+           "PlaceID → PBC → Intention",
+           "Total Indirect"),
+  Estimate = c(indirect_via_att, indirect_via_norm, indirect_via_pbc, total_indirect),
+  CI_lower = c(ci_att[1], ci_norm[1], ci_pbc[1], ci_total[1]),
+  CI_upper = c(ci_att[2], ci_norm[2], ci_pbc[2], ci_total[2])
+)
+
+knitr::kable(indirect_summary, digits = 3)
+write.csv(indirect_summary, here("outputs", "11_v1_indirect_effects.csv"), row.names = FALSE)
+```
+
+
+## Exploratory Belief-Level Effects
+```{r v1_beliefs_hexp1}
+# Extract ALL belief paths to ALL TPB determinants (exploratory)
+belief_paths <- v1_paths %>%
+  filter(
+    lhs %in% c("Attitude", "Norm", "PBC_Scale") &
+    (grepl("Gewichtete_BB", rhs) | grepl("NB_", rhs) | grepl("Gewichtete_CB", rhs))
+  ) %>%
+  arrange(rhs, lhs)
+
+# Show all belief paths
+knitr::kable(belief_paths %>% select(rhs, lhs, est.std, se, z, pvalue, sig))
+
+# Group by belief
+belief_summary <- belief_paths %>%
+  group_by(rhs) %>%
+  summarise(
+    n_paths = n(),
+    n_significant = sum(pvalue < 0.05),
+    sig_with_Attitude = sum(lhs == "Attitude" & pvalue < 0.05),
+    sig_with_Norm = sum(lhs == "Norm" & pvalue < 0.05),
+    sig_with_PBC = sum(lhs == "PBC_Scale" & pvalue < 0.05),
+    .groups = "drop"
+  )
+
+knitr::kable(belief_summary)
+
+# Significant paths by TPB construct
+att_paths <- belief_paths %>% filter(lhs == "Attitude", pvalue < 0.05)
+norm_paths <- belief_paths %>% filter(lhs == "Norm", pvalue < 0.05)
+pbc_paths <- belief_paths %>% filter(lhs == "PBC_Scale", pvalue < 0.05)
+
+if (nrow(att_paths) > 0) {
+  knitr::kable(att_paths %>% select(rhs, est.std, pvalue, sig), 
+               caption = "Significant Attitude paths")
+}
+
+if (nrow(norm_paths) > 0) {
+  knitr::kable(norm_paths %>% select(rhs, est.std, pvalue, sig),
+               caption = "Significant Norm paths")
+}
+
+if (nrow(pbc_paths) > 0) {
+  knitr::kable(pbc_paths %>% select(rhs, est.std, pvalue, sig),
+               caption = "Significant PBC paths")
+}
+
+# Save results
+write.csv(belief_paths, here("outputs", "11_v1_belief_paths.csv"), row.names = FALSE)
+write.csv(belief_summary, here("outputs", "11_v1_belief_summary.csv"), row.names = FALSE)
+```
+
+
+
+
+## R² Values (Explained Variance)
+```{r v1_r_squared}
+# Extract R² for endogenous variables
+v1_r2 <- inspect(fit_v1, "r2")
+
+cat("\nVariant 1: R² (Explained Variance)\n")
+cat("==================================\n\n")
+
+# Format R² table
+r2_table <- data.frame(
+  Endogenous_Variable = names(v1_r2),
+  R_squared = round(v1_r2, 3),
+  Variance_Explained_Pct = paste0(round(v1_r2 * 100, 1), "%")
+)
+
+knitr::kable(r2_table)
+
+cat("\nInterpretation:\n")
+cat("  Intention: R² =", round(v1_r2["Intention"], 3), 
+    "→", round(v1_r2["Intention"] * 100, 1), "% of variance explained\n")
+cat("  Attitude: R² =", round(v1_r2["Attitude"], 3),
+    "→", round(v1_r2["Attitude"] * 100, 1), "% of variance explained\n")
+cat("  Norm: R² =", round(v1_r2["Norm"], 3),
+    "→", round(v1_r2["Norm"] * 100, 1), "% of variance explained\n")
+cat("  PBC: R² =", round(v1_r2["PBC_Scale"], 3),
+    "→", round(v1_r2["PBC_Scale"] * 100, 1), "% of variance explained\n")
+if ("WVT" %in% names(v1_r2)) {
+  cat("  WTP: R² =", round(v1_r2["WVT"], 3),
+      "→", round(v1_r2["WVT"] * 100, 1), "% of variance explained\n")
+}
+
+write.csv(r2_table, here("outputs", "11_v1_r_squared.csv"), row.names = FALSE)
+```
+
+## Extract Results for Variant 3 (WTP Model) - For Paper
+```{r extract_wtp_results}
+# ============================================================================
+# VARIANT 3 RESULTS EXTRACTION (WTP as Outcome)
+# ============================================================================
+
+# 1. Standardized Path Coefficients for Main Structural Paths
+# ----------------------------------------------------------------------------
+wtp_params <- parameterEstimates(fit_v3, standardized = TRUE) %>%
+  filter(op == "~") %>%
+  filter(lhs == "WVT" | rhs %in% c("Attitude", "Norm", "PBC_Scale", "PlaceID")) %>%
+  select(lhs, rhs, est, std.all, se, pvalue) %>%
+  mutate(
+    sig = case_when(
+      pvalue < 0.001 ~ "***",
+      pvalue < 0.01  ~ "**",
+      pvalue < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+knitr::kable(wtp_params, digits = 3, 
+             caption = "Standardized Path Coefficients: WTP Model (Variant 3)")
+
+# Save to CSV
+write.csv(wtp_params, here("outputs", "10_wtp_paths.csv"), row.names = FALSE)
+
+
+# 2. R-squared Values
+# ----------------------------------------------------------------------------
+wtp_r2 <- inspect(fit_v3, "r2") %>%
+  as.data.frame() %>%
+  rownames_to_column("Variable") %>%
+  rename(R2 = ".") %>%
+  mutate(R2_percent = round(R2 * 100, 1))
+
+knitr::kable(wtp_r2, digits = 3,
+             caption = "R-squared Values: WTP Model")
+
+write.csv(wtp_r2, here("outputs", "10_wtp_r2.csv"), row.names = FALSE)
+
+
+# 3. Model Fit Summary for WTP Model
+# ----------------------------------------------------------------------------
+wtp_fit_summary <- data.frame(
+  Index = c("Chi-Square (scaled)", "df", "p-value", 
+            "CFI (robust)", "TLI (robust)", "RMSEA (robust)", 
+            "RMSEA 90% CI Lower", "RMSEA 90% CI Upper",
+            "SRMR", "AIC", "BIC"),
+  Value = c(
+    fitMeasures(fit_v3, "chisq.scaled"),
+    fitMeasures(fit_v3, "df.scaled"),
+    fitMeasures(fit_v3, "pvalue.scaled"),
+    fitMeasures(fit_v3, "cfi.robust"),
+    fitMeasures(fit_v3, "tli.robust"),
+    fitMeasures(fit_v3, "rmsea.robust"),
+    fitMeasures(fit_v3, "rmsea.ci.lower.robust"),
+    fitMeasures(fit_v3, "rmsea.ci.upper.robust"),
+    fitMeasures(fit_v3, "srmr"),
+    fitMeasures(fit_v3, "aic"),
+    fitMeasures(fit_v3, "bic")
+  )
+) %>%
+  mutate(Value = round(Value, 3))
+
+knitr::kable(wtp_fit_summary, 
+             caption = "Model Fit Indices: WTP Model (Variant 3)")
+
+write.csv(wtp_fit_summary, here("outputs", "10_wtp_fit.csv"), row.names = FALSE)
+
+
+# 4. Belief-Level Effects on TPB Constructs (for WTP model)
+# ----------------------------------------------------------------------------
+wtp_belief_effects <- parameterEstimates(fit_v3, standardized = TRUE) %>%
+  filter(op == "~") %>%
+  filter(lhs %in% c("Attitude", "Norm", "PBC_Scale")) %>%
+  filter(!(rhs %in% c("PlaceID"))) %>%  # Exclude PlaceID (reported separately)
+  select(lhs, rhs, est, std.all, se, pvalue) %>%
+  mutate(
+    sig = case_when(
+      pvalue < 0.001 ~ "***",
+      pvalue < 0.01  ~ "**",
+      pvalue < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  arrange(lhs, desc(abs(std.all)))
+
+knitr::kable(wtp_belief_effects, digits = 3,
+             caption = "Belief-Level Effects on TPB Constructs: WTP Model")
+
+write.csv(wtp_belief_effects, here("outputs", "10_wtp_belief_effects.csv"), 
+          row.names = FALSE)
+
+
+# 5. Indirect Effects: PlaceID → WTP (via Attitude, Norm, PBC)
+# ----------------------------------------------------------------------------
+# Define indirect effects manually
+model_v3_indirect <- '
+  # Measurement Model
+  Attitude  =~ GB_AtGu + GB_AtAt + GB_AtGuen
+  Norm      =~ GB_NormSup + GB_NormSelf
+  PlaceID   =~ PlaceID1 + PlaceID2 + PlaceID3
+  
+  # Structural Model
+  WVT ~ b1*Attitude + b2*Norm + b3*PBC_Scale
+  Attitude ~ a1*PlaceID
+  Norm ~ a2*PlaceID
+  PBC_Scale ~ a3*PlaceID
+  
+  # Full belief structure (same as corrected model above)
+  Attitude ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+             Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh +
+             Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder + 
+             Gewichtete_CB_Preis + NB_Fam + NB_Freunde + NB_Gen + NB_UmM
+  
+  Norm ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+         Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh +
+         Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder + 
+         Gewichtete_CB_Preis + NB_Fam + NB_Freunde + NB_Gen + NB_UmM
+  
+  PBC_Scale ~ Gewichtete_BB_Preis + Gewichtete_BB_Klima + 
+              Gewichtete_BB_Preisstabili + Gewichtete_BB_Unabh +
+              Gewichtete_CB_Aufwand + Gewichtete_CB_Foerder + 
+              Gewichtete_CB_Preis + NB_Fam + NB_Freunde + NB_Gen + NB_UmM
+  
+  # Residual correlations
+  Attitude ~~ Norm
+  Attitude ~~ PBC_Scale
+  Norm ~~ PBC_Scale
+  
+  # Define indirect effects
+  ind_att := a1 * b1
+  ind_norm := a2 * b2
+  ind_pbc := a3 * b3
+  total_indirect := ind_att + ind_norm + ind_pbc
+'
+
+# Estimate with indirect effects
+fit_v3_indirect <- sem(model_v3_indirect, data = data, 
+                       missing = "ml", estimator = "MLR")
+
+# Extract indirect effects
+wtp_indirect <- parameterEstimates(fit_v3_indirect, standardized = TRUE) %>%
+  filter(label %in% c("ind_att", "ind_norm", "ind_pbc", "total_indirect")) %>%
+  select(label, est, std.all, se, pvalue) %>%
+  mutate(
+    sig = case_when(
+      pvalue < 0.001 ~ "***",
+      pvalue < 0.01  ~ "**",
+      pvalue < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+knitr::kable(wtp_indirect, digits = 3,
+             caption = "Indirect Effects: Place Identity → WTP")
+
+write.csv(wtp_indirect, here("outputs", "10_wtp_indirect_effects.csv"), 
+          row.names = FALSE)
+
+
+# 6. Comparative Table: Intention vs. WTP (Side-by-Side)
+# ----------------------------------------------------------------------------
+# Extract key paths from Variant 1 (Intention model)
+int_paths <- parameterEstimates(fit_v1, standardized = TRUE) %>%
+  filter(op == "~", lhs == "Intention") %>%
+  filter(rhs %in% c("Attitude", "Norm", "PBC_Scale")) %>%
+  select(rhs, est_int = est, std_int = std.all, p_int = pvalue)
+
+# Extract same paths from Variant 3 (WTP model)
+wtp_paths <- parameterEstimates(fit_v3, standardized = TRUE) %>%
+  filter(op == "~", lhs == "WVT") %>%
+  filter(rhs %in% c("Attitude", "Norm", "PBC_Scale")) %>%
+  select(rhs, est_wtp = est, std_wtp = std.all, p_wtp = pvalue)
+
+# Merge and format as character from the start
+comparison_table <- full_join(int_paths, wtp_paths, by = "rhs") %>%
+  mutate(
+    Predictor = rhs,
+    `β (Intention)` = sprintf("%.3f", std_int),  # Format as string
+    `p (Intention)` = ifelse(p_int < 0.001, "<.001", sprintf("%.3f", p_int)),
+    `β (WTP)` = sprintf("%.3f", std_wtp),  # Format as string
+    `p (WTP)` = ifelse(p_wtp < 0.001, "<.001", sprintf("%.3f", p_wtp))
+  ) %>%
+  select(Predictor, `β (Intention)`, `p (Intention)`, `β (WTP)`, `p (WTP)`)
+
+# Add R² row
+r2_int <- inspect(fit_v1, "r2")["Intention"] * 100
+r2_wtp <- inspect(fit_v3, "r2")["WVT"] * 100
+
+comparison_table <- bind_rows(
+  comparison_table,
+  data.frame(
+    Predictor = "R²",
+    `β (Intention)` = paste0(round(r2_int, 1), "%"),
+    `p (Intention)` = "",
+    `β (WTP)` = paste0(round(r2_wtp, 1), "%"),
+    `p (WTP)` = "",
+    check.names = FALSE,
+    stringsAsFactors = FALSE  # Important!
+  )
+)
+
+# Add fit indices rows
+comparison_table <- bind_rows(
+  comparison_table,
+  data.frame(
+    Predictor = "CFI",
+    `β (Intention)` = sprintf("%.3f", fitMeasures(fit_v1, "cfi.robust")),
+    `p (Intention)` = "",
+    `β (WTP)` = sprintf("%.3f", fitMeasures(fit_v3, "cfi.robust")),
+    `p (WTP)` = "",
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  ),
+  data.frame(
+    Predictor = "RMSEA",
+    `β (Intention)` = sprintf("%.3f", fitMeasures(fit_v1, "rmsea.robust")),
+    `p (Intention)` = "",
+    `β (WTP)` = sprintf("%.3f", fitMeasures(fit_v3, "rmsea.robust")),
+    `p (WTP)` = "",
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+)
+
+knitr::kable(comparison_table,
+             caption = "Comparative Results: Intention vs. WTP Models")
+
+write.csv(comparison_table, here("outputs", "10_comparison_intention_wtp.csv"), 
+          row.names = FALSE)
+
+
+```
+
+-
+```{r session-info}
+sessionInfo()
+```
