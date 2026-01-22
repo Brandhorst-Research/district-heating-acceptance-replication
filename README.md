@@ -23,6 +23,9 @@ To reproduce the results:
 
 The knitted report reproduces all tables and figures reported in the manuscript.
 
+Note: Due to computationally intensive procedures (e.g. iterative estimation),
+knitting the analysis may take approximately 15 minutes on a standard machine.
+
 ## Contact
 Leif Donar Brandhorst
 Department of Social Sciences, University of Applied Sciences and Arts (HSBI), Interaktion 1, 33619 Bielefeld, Germany
