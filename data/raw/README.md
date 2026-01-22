@@ -11,3 +11,7 @@ Before inclusion in this repository, the following steps were applied:
 
 All subsequent data processing steps are fully documented
 and reproducible using the scripts in the `code/` directory.
+
+### File
+
+- `Raw_Data_02_01_25.sav` – anonymized survey dataset
