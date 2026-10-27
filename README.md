@@ -8,7 +8,7 @@ Brandhorst, L. D. (2026). *Psychological Determinants of Renewable District Heat
 
 - `code/` – R Markdown file with the complete analysis (`analysis.Rmd`) and the script that created the public data file (`00_make_public_data.R`)
 - `data/raw/` – anonymized survey data (SPSS format; age in 10-year groups)
-- `outputs/` – knitted report (`main_report.docx`) and all result files (CSV, RDS) written by the analysis
+- `outputs/` – knitted report (`00_main_report.docx`) and all result files (CSV, RDS) written by the analysis
 
 ## Reproduction
 
