@@ -1,0 +1,5 @@
+"label","est","ci.lower","ci.upper","zero_excluded"
+"ind_att",0.062,-0.015,0.134,FALSE
+"ind_norm",0.005,-0.009,0.023,FALSE
+"ind_pbc",0.035,-0.005,0.078,FALSE
+"total_indirect",0.102,-0.012,0.201,FALSE

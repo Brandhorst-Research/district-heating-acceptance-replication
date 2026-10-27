@@ -1,0 +1,7 @@
+"lhs","rhs","est.std","se","pvalue","sig"
+"Intention","Attitude",0.554,0.068,0,"***"
+"Intention","Norm",0.054,0.06,0.37,""
+"Intention","PBC_Scale",0.306,0.056,0,"***"
+"Attitude","PlaceID",0.073,0.043,0.089,""
+"Norm","PlaceID",0.06,0.049,0.226,""
+"PBC_Scale","PlaceID",0.075,0.042,0.073,""

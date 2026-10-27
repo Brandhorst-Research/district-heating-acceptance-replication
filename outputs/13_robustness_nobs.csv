@@ -1,0 +1,4 @@
+"Model","N_used"
+"Main model (full sample)",542
+"Reference (robustness sample)",512
+"With demographic controls",512

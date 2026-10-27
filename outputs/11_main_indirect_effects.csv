@@ -1,0 +1,13 @@
+"effect","est","std.all","se","pvalue","ci.lower","ci.upper","zero_excluded"
+"Gewichtete_BB_Preis",0.035,0.023,0.019,0.062,0,0.077,TRUE
+"Gewichtete_BB_Klima",0.087,0.057,0.023,0,0.046,0.142,TRUE
+"Gewichtete_BB_Preisstabili",0.094,0.062,0.026,0,0.048,0.155,TRUE
+"Gewichtete_BB_Unabh",-0.013,-0.008,0.016,0.407,-0.048,0.02,FALSE
+"NB_Fam",0.014,0.009,0.013,0.256,-0.009,0.042,FALSE
+"NB_UmM",0,0,0.012,0.998,-0.025,0.024,FALSE
+"NB_Freunde",0.013,0.009,0.012,0.283,-0.01,0.037,FALSE
+"NB_Gen",0.036,0.024,0.016,0.027,0.006,0.072,TRUE
+"Gewichtete_CB_Preis",0.001,0,0.004,0.887,-0.009,0.013,FALSE
+"Gewichtete_CB_Aufwand",0.005,0.003,0.009,0.559,-0.012,0.025,FALSE
+"Gewichtete_CB_Foerder",0.028,0.019,0.012,0.022,0.007,0.055,TRUE
+"TOTAL",0.3,0.198,0.047,0,0.207,0.395,TRUE

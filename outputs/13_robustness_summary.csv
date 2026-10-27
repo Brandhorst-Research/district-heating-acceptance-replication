@@ -1,0 +1,4 @@
+"Model","N","R2_Intention","chisq.scaled","df.scaled","pvalue.scaled","cfi.robust","tli.robust","rmsea.robust","srmr"
+"Main model (full sample)",542,0.707,213.387,137,0,0.99,0.981,0.033,0.023
+"Reference (robustness sample)",512,0.716,219.957,137,0,0.988,0.978,0.036,0.026
+"With demographic controls",512,0.717,240.818,151,0,0.987,0.974,0.036,0.025

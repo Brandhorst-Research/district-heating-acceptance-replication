@@ -1,0 +1,10 @@
+"Index","Value"
+"chisq.scaled",257.942622690337
+"df.scaled",145
+"pvalue.scaled",2.36330175429345e-08
+"cfi.robust",0.978675682471453
+"tli.robust",0.970881276754123
+"rmsea.robust",0.0412640586512851
+"rmsea.ci.lower.robust",0.0317643116195152
+"rmsea.ci.upper.robust",0.0503809074067693
+"srmr",0.0729595202617489

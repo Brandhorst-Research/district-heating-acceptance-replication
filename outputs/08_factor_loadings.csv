@@ -1,0 +1,12 @@
+"lhs","rhs","est.std","se","z","pvalue"
+"Attitude","GB_AtGu",0.909,0.013,67.931,0
+"Attitude","GB_AtAt",0.96,0.01,92.701,0
+"Attitude","GB_AtGuen",0.772,0.022,34.613,0
+"Norm","GB_NormSup",0.918,0.019,47.55,0
+"Norm","GB_NormSelf",0.88,0.025,35.219,0
+"Intention","GB_Int1",0.939,0.011,82.307,0
+"Intention","GB_Int2",0.938,0.014,66.143,0
+"Intention","GB_Int3",0.938,0.013,72.478,0
+"PlaceID","PlaceID1",0.891,0.026,34.18,0
+"PlaceID","PlaceID2",0.858,0.025,34.466,0
+"PlaceID","PlaceID3",0.803,0.029,27.332,0

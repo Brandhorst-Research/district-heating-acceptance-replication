@@ -1,0 +1,937 @@
+---
+title: "Renewable District Heating Acceptance"
+author: "Leif Donar Brandhorst"
+date: "`r Sys.Date()`"
+output:
+  word_document:
+    toc: true
+    toc_depth: '3'
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    code_folding: show
+    df_print: paged
+---
+
+# Overview
+
+Analysis code for the paper *Psychological Determinants of Renewable District
+Heating Acceptance: A Theory of Planned Behavior Study*.
+
+Run the document from top to bottom. Every chunk saves its results to
+`outputs/` (CSV or RDS), so each number in the paper can be traced to a file.
+
+| Section of this document | Used in the paper |
+|---|---|
+| Data Preparation, Missing Data | 4.5 Data Analysis (MCAR test), 5.1 Sample Characteristics |
+| Scale Construction | 4.3 Questionnaire Development (weighted beliefs), 5.2 (PBC item decision) |
+| Descriptive Statistics, Reliability | 5.2–5.3, Table 1, Table 3 |
+| Confirmatory Factor Analysis | 5.2, Table 1 (CR, AVE), Table 2 |
+| Multicollinearity | 5.2, Table 1 (VIF) |
+| Structural Model (main model: place identity via beliefs) | 5.4–5.4.3, Figure 2 |
+| Earlier Specification (place identity -> constructs) | 5.4.3 (comparison) |
+| Robustness: Demographic Controls | 5.4.4 |
+
+Data note: the questionnaire also contained an item on acceptable price premiums
+(`WVT`). It does not measure willingness to pay in an incentive-compatible way
+and is therefore **not analyzed**. It remains in the raw data.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, message = FALSE, warning = FALSE,
+  fig.width = 12, fig.height = 8, dpi = 300
+)
+
+set.seed(12345)
+
+# All packages are loaded here (installed on first run if missing)
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  haven, dplyr, tidyr, tibble, here,   # data handling
+  naniar, MissMech,                    # missing data
+  psych, car,                          # reliability, VIF
+  lavaan, semTools                     # CFA / SEM
+)
+
+for (d in c("data", "outputs")) {
+  if (!dir.exists(here(d))) dir.create(here(d))
+}
+```
+
+# Data Preparation
+
+## Data Import
+
+Public SPSS file; value labels are stripped in the next step. In the public
+file, exact age is replaced by 10-year age groups (`Age_group`, see
+`code/00_make_public_data.R`).
+
+```{r load_data}
+data_raw <- haven::read_spss(
+  here("data", "raw", "Survey_Data_public.sav"),
+  user_na = FALSE
+)
+
+cat("Original sample size:", nrow(data_raw), "\n")
+cat("Variables:", ncol(data_raw), "\n")
+```
+
+## Data Cleaning
+
+Remove SPSS labels and recode `Gender` and `Zeitung` (newspaper) as factors.
+
+```{r clean_data}
+data <- data_raw %>%
+  haven::zap_labels() %>%
+  haven::zap_formats() %>%
+  mutate(
+    Gender = factor(Gender, levels = c(1, 2, 3),
+                    labels = c("female", "male", "diverse")),
+    Zeitung = factor(Zeitung, levels = c(1, 2, 3, 4, 5),
+                     labels = c("Neue Westfälische", "Westfalen Blatt",
+                                "Die Glocke", "andere", "keine")),
+    ID = as.character(ID)
+  ) %>%
+  select(-any_of("miss_all"))
+
+saveRDS(data, here("data", "01_data_cleaned.rds"))
+```
+
+# Missing Data Analysis
+
+Purpose: describe missingness and test whether it is completely at random
+(MCAR). The result supports the use of full-information ML in the SEM
+(Section 4.5).
+
+## Variable Selection
+
+All variables that enter the analyses.
+
+```{r define_variables}
+sem_variables <- c(
+  # TPB constructs
+  "GB_AtGu", "GB_AtAt", "GB_AtGuen",        # Attitude
+  "GB_NormSup", "GB_NormSelf",              # Subjective norm
+  "GB_Int1", "GB_Int2", "GB_Int3",          # Intention
+  "GB_PBCeasy",                             # PBC (single item)
+
+  # Place identity
+  "PlaceID1", "PlaceID2", "PlaceID3",
+
+  # Behavioral beliefs and outcome evaluations
+  "BB_Unabh", "BB_PStabil", "BB_Preis", "BB_Klima",
+  "BBOE_Unabh", "BBOE_PStabil", "BBOE_Preis", "BBOE_Klima",
+
+  # Control beliefs and control facilitation
+  "CB_Preis", "CB_Aufwand", "CB_Förder",
+  "CF_Preis", "CF_Aufwand", "CF_Förder",
+
+  # Normative beliefs
+  "NB_Fam", "NB_UmM", "NB_Freunde", "NB_Gen",
+
+  # Demographics
+  "Age_group", "Gender"
+)
+```
+
+## Missing Data Pattern
+
+```{r missing_summary}
+miss_summary <- naniar::miss_var_summary(data[, sem_variables])
+
+knitr::kable(miss_summary %>% filter(n_miss > 0))
+
+cat("\nTotal observations:", nrow(data), "\n")
+cat("Missing cells:", sum(is.na(data[, sem_variables])), "\n")
+cat("Percentage missing:",
+    round(100 * mean(is.na(data[, sem_variables])), 2), "%\n")
+cat("Complete cases:", sum(complete.cases(data[, sem_variables])), "\n")
+
+write.csv(
+  data.frame(
+    variable = miss_summary$variable,
+    n_miss   = as.numeric(miss_summary$n_miss),
+    pct_miss = as.numeric(miss_summary$pct_miss)
+  ),
+  here("outputs", "02_missing_summary.csv"), row.names = FALSE
+)
+```
+
+## Hawkins Test and Non-parametric MCAR Test
+
+Little's MCAR test assumes multivariate normality. The Hawkins test checks this
+assumption; if it is rejected, the non-parametric MCAR test of Jamshidian and
+Jalal (2010) is used instead (`MissMech`).
+
+```{r hawkins_and_mcar_test}
+data_numeric <- data[, sem_variables] |>
+  dplyr::select(dplyr::where(is.numeric))
+
+mcar_prelim <- MissMech::TestMCARNormality(data_numeric)
+
+# Labeled output of the package, to verify which p-value is which
+summary(mcar_prelim)
+
+hawkins_p <- mcar_prelim$pvalcomb    # Hawkins test (normality / homoscedasticity)
+np_p      <- mcar_prelim$pnormality  # p-value reported as non-parametric MCAR test
+
+cat("Hawkins test: p =", format(hawkins_p, scientific = TRUE), "\n")
+cat("Non-parametric MCAR test: p =", round(np_p, 4), "\n")
+
+write.csv(
+  data.frame(Test = c("Hawkins", "Non-parametric MCAR"),
+             p_value = c(hawkins_p, np_p)),
+  here("outputs", "03_mcar_tests.csv"), row.names = FALSE
+)
+```
+
+The Hawkins test rejected multivariate normality (*p* = `r format(hawkins_p, scientific = TRUE, digits = 3)`), so Little's parametric MCAR test would be unreliable. The non-parametric MCAR test did not reject the MCAR hypothesis (*p* = `r round(np_p, 3)`).
+
+# Scale Construction
+
+## Reliability Check for PBC Items
+
+The two PBC items (`GB_PBCeasy` = capacity/ease, `GB_PBC_SD` = autonomy) were
+tested for internal consistency. This check was added after the first
+reliability analysis and determines how PBC is operationalized.
+
+```{r pbc_reliability_check}
+pbc_alpha <- psych::alpha(data %>% select(GB_PBCeasy, GB_PBC_SD))
+
+cat("PBC reliability with 2 items: Cronbach's alpha =",
+    round(pbc_alpha$total$raw_alpha, 3), "\n\n")
+knitr::kable(pbc_alpha$item.stats[, c("r.cor", "r.drop")])
+knitr::kable(pbc_alpha$alpha.drop[, "raw_alpha", drop = FALSE])
+
+if (pbc_alpha$total$raw_alpha < 0.60) {
+  cat("\nAlpha < .60: GB_PBC_SD is excluded; PBC = GB_PBCeasy only.\n")
+}
+```
+
+Due to insufficient internal consistency (α = `r round(pbc_alpha$total$raw_alpha, 2)`), `GB_PBC_SD` was excluded. PBC is operationalized as a single item (`GB_PBCeasy`).
+
+## Create Weighted Belief Variables
+
+Following the expectancy-value logic of the TPB, each belief is multiplied by
+its outcome evaluation (behavioral beliefs) or control facilitation (control
+beliefs). Normative beliefs (`NB_*`) enter unweighted.
+
+```{r create_weighted_beliefs}
+data <- data %>%
+  mutate(
+    # Behavioral beliefs x outcome evaluations
+    Gewichtete_BB_Unabh        = BB_Unabh  * BBOE_Unabh,
+    Gewichtete_BB_Preisstabili = BB_PStabil * BBOE_PStabil,
+    Gewichtete_BB_Preis        = BB_Preis  * BBOE_Preis,
+    Gewichtete_BB_Klima        = BB_Klima  * BBOE_Klima,
+
+    # Control beliefs x control facilitation
+    Gewichtete_CB_Preis        = CB_Preis    * CF_Preis,
+    Gewichtete_CB_Aufwand      = CB_Aufwand  * CF_Aufwand,
+    Gewichtete_CB_Foerder      = CB_Förder   * CF_Förder
+  )
+
+saveRDS(data, here("data", "04_data_with_beliefs.rds"))
+```
+
+## Construct TPB Scales
+
+Scale means are used for descriptives, correlations and VIF. The SEM uses the
+latent constructs. `na.rm = FALSE`: a scale score is missing if any item is
+missing.
+
+```{r construct_scales}
+data <- data %>%
+  rowwise() %>%
+  mutate(
+    Attitude_Scale  = mean(c(GB_AtGu, GB_AtAt, GB_AtGuen), na.rm = FALSE),
+    Norm_Scale      = mean(c(GB_NormSup, GB_NormSelf), na.rm = FALSE),
+    Intention_Scale = mean(c(GB_Int1, GB_Int2, GB_Int3), na.rm = FALSE),
+    PlaceID_Scale   = mean(c(PlaceID1, PlaceID2, PlaceID3), na.rm = FALSE),
+    PBC_Scale       = GB_PBCeasy   # single item
+  ) %>%
+  ungroup()
+
+saveRDS(data, here("data", "05_data_with_scales.rds"))
+```
+
+## Derived Variables for the Robustness Check
+
+`female` (1 = female, 0 = male; "diverse" and missing set to NA, because the
+group is too small for a separate estimate) and `Age_dec` (midpoint of the
+10-year age group in decades, so that the coefficient can be read as the effect
+per decade; the open group 75+ is set to 80 years). Used only in the robustness
+section.
+
+```{r derived_variables}
+data <- data %>%
+  mutate(
+    female  = case_when(Gender == "female" ~ 1,
+                        Gender == "male"   ~ 0,
+                        TRUE ~ NA_real_),
+    Age_dec = c(21, 29.5, 39.5, 49.5, 59.5, 69.5, 80)[Age_group] / 10
+  )
+```
+
+# Descriptive Statistics
+
+## Sample Characteristics
+
+```{r sample_demographics}
+cat("Sample (N =", nrow(data), ")\n\n")
+age_labels <- c("18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+")
+age_table  <- table(factor(data$Age_group, levels = 1:7, labels = age_labels), useNA = "ifany")
+print(cbind(n = age_table, percent = round(100 * prop.table(age_table), 1)))
+cat("\n")
+
+gender_table <- table(data$Gender, useNA = "ifany")
+print(cbind(n = gender_table, percent = round(100 * prop.table(gender_table), 1)))
+```
+
+## Descriptive Statistics for Study Variables (Table 1)
+
+```{r descriptive_statistics}
+desc_vars <- c(
+  "GB_AtGu", "GB_AtAt", "GB_AtGuen",
+  "GB_NormSup", "GB_NormSelf",
+  "GB_Int1", "GB_Int2", "GB_Int3",
+  "GB_PBCeasy",
+  "PlaceID1", "PlaceID2", "PlaceID3",
+  "Gewichtete_BB_Unabh", "Gewichtete_BB_Preisstabili",
+  "Gewichtete_BB_Preis", "Gewichtete_BB_Klima",
+  "Gewichtete_CB_Preis", "Gewichtete_CB_Aufwand", "Gewichtete_CB_Foerder",
+  "NB_Fam", "NB_UmM", "NB_Freunde", "NB_Gen",
+  "Attitude_Scale", "Norm_Scale", "Intention_Scale", "PlaceID_Scale", "PBC_Scale"
+)
+
+desc_stats <- data %>%
+  select(all_of(desc_vars)) %>%
+  summarise(across(everything(),
+                   list(n   = ~sum(!is.na(.)),
+                        M   = ~mean(., na.rm = TRUE),
+                        SD  = ~sd(., na.rm = TRUE),
+                        Min = ~min(., na.rm = TRUE),
+                        Max = ~max(., na.rm = TRUE)),
+                   .names = "{.col}_{.fn}")) %>%
+  pivot_longer(everything(), names_to = "stat", values_to = "value") %>%
+  separate(stat, into = c("variable", "statistic"), sep = "_(?=[^_]+$)") %>%
+  pivot_wider(names_from = statistic, values_from = value) %>%
+  mutate(across(c(M, SD, Min, Max), ~round(., 2)))
+
+knitr::kable(desc_stats)
+write.csv(desc_stats, here("outputs", "06_descriptive_statistics.csv"), row.names = FALSE)
+```
+
+## Correlation Matrix (Table 3)
+
+Pairwise deletion.
+
+```{r correlation_matrix}
+cor_vars <- c(
+  "Attitude_Scale", "Norm_Scale", "PBC_Scale", "Intention_Scale", "PlaceID_Scale",
+  "Gewichtete_BB_Preis", "Gewichtete_BB_Klima", "Gewichtete_BB_Preisstabili",
+  "Gewichtete_CB_Preis", "Gewichtete_CB_Aufwand", "Gewichtete_CB_Foerder",
+  "NB_Gen"
+)
+
+cor_matrix <- cor(data[, cor_vars], use = "pairwise.complete.obs")
+
+knitr::kable(round(cor_matrix, 3))
+write.csv(round(cor_matrix, 3), here("outputs", "06_correlation_matrix.csv"))
+```
+
+# Reliability Analysis
+
+Cronbach's alpha and McDonald's omega for the multi-item scales.
+
+```{r reliability_analysis}
+scales_list <- list(
+  Attitude  = c("GB_AtGu", "GB_AtAt", "GB_AtGuen"),
+  Norm      = c("GB_NormSup", "GB_NormSelf"),
+  Intention = c("GB_Int1", "GB_Int2", "GB_Int3"),
+  PlaceID   = c("PlaceID1", "PlaceID2", "PlaceID3")
+)
+
+reliability_table <- do.call(rbind, lapply(names(scales_list), function(s) {
+  items <- data[, scales_list[[s]]]
+  data.frame(
+    Scale   = s,
+    N_Items = length(scales_list[[s]]),
+    Alpha   = round(psych::alpha(items)$total$raw_alpha, 3),
+    Omega   = round(psych::omega(items, nfactors = 1, plot = FALSE)$omega.tot, 3)
+  )
+}))
+
+knitr::kable(reliability_table)
+write.csv(reliability_table, here("outputs", "07_reliability.csv"), row.names = FALSE)
+```
+
+# Confirmatory Factor Analysis
+
+Measurement model for the four latent constructs. PBC is a single item and
+therefore not part of the CFA. Estimator: MLR with FIML for missing values.
+
+```{r cfa_model}
+cfa_vars <- c("GB_AtGu", "GB_AtAt", "GB_AtGuen",
+              "GB_NormSup", "GB_NormSelf",
+              "GB_Int1", "GB_Int2", "GB_Int3",
+              "PlaceID1", "PlaceID2", "PlaceID3")
+
+# Cases with no valid answer on any CFA item carry no information
+data_cfa <- data %>%
+  filter(rowSums(!is.na(select(., all_of(cfa_vars)))) > 0)
+
+cat("Cases removed (all CFA items missing):", nrow(data) - nrow(data_cfa), "\n")
+cat("Cases for CFA:", nrow(data_cfa), "\n\n")
+
+cfa_model <- '
+  Attitude  =~ GB_AtGu + GB_AtAt + GB_AtGuen
+  Norm      =~ GB_NormSup + GB_NormSelf
+  Intention =~ GB_Int1 + GB_Int2 + GB_Int3
+  PlaceID   =~ PlaceID1 + PlaceID2 + PlaceID3
+'
+
+fit_cfa <- cfa(cfa_model, data = data_cfa, missing = "fiml", estimator = "MLR")
+
+summary(fit_cfa, fit.measures = TRUE, standardized = TRUE)
+saveRDS(fit_cfa, here("outputs", "08_cfa_model.rds"))
+```
+
+## Model Fit Indices
+
+```{r cfa_fit}
+fit_indices <- fitMeasures(fit_cfa, c("chisq.scaled", "df.scaled", "pvalue.scaled",
+                                      "cfi.robust", "tli.robust",
+                                      "rmsea.robust", "rmsea.ci.lower.robust",
+                                      "rmsea.ci.upper.robust", "srmr"))
+
+knitr::kable(round(fit_indices, 3))
+write.csv(data.frame(Index = names(fit_indices), Value = as.numeric(fit_indices)),
+          here("outputs", "08_cfa_fit.csv"), row.names = FALSE)
+```
+
+## Factor Loadings (Table 2)
+
+Standardized loadings with SE, z and p. Unstandardized loadings:
+`parameterEstimates(fit_cfa)`.
+
+```{r cfa_loadings}
+loadings <- standardizedSolution(fit_cfa) %>%
+  filter(op == "=~") %>%
+  select(lhs, rhs, est.std, se, z, pvalue) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+knitr::kable(loadings)
+write.csv(loadings, here("outputs", "08_factor_loadings.csv"), row.names = FALSE)
+```
+
+## Composite Reliability and AVE
+
+```{r cfa_cr_ave}
+cr_values  <- semTools::compRelSEM(fit_cfa, tau.eq = FALSE, return.total = FALSE)
+ave_values <- semTools::AVE(fit_cfa)
+
+cr_ave <- data.frame(
+  Construct = names(ave_values),
+  CR  = round(cr_values, 3),
+  AVE = round(ave_values, 3)
+)
+
+knitr::kable(cr_ave)
+write.csv(cr_ave, here("outputs", "08_cr_ave.csv"), row.names = FALSE)
+```
+
+## Discriminant Validity (Fornell-Larcker)
+
+Diagonal = square root of AVE; off-diagonal = latent correlations. Discriminant
+validity holds if each diagonal value exceeds the correlations in its row and
+column.
+
+```{r fornell_larcker}
+fornell_larcker <- lavInspect(fit_cfa, "cor.lv")
+for (i in seq_len(nrow(cr_ave))) {
+  fornell_larcker[i, i] <- sqrt(cr_ave$AVE[i])
+}
+
+knitr::kable(round(fornell_larcker, 3))
+write.csv(round(fornell_larcker, 3), here("outputs", "08_fornell_larcker.csv"))
+```
+
+# Multicollinearity Check
+
+Variance inflation factors in a regression of intention on the scale scores of
+the four predictors (complete cases).
+
+```{r vif_analysis}
+vif_data <- data %>%
+  select(Attitude_Scale, Norm_Scale, PBC_Scale, PlaceID_Scale, Intention_Scale) %>%
+  na.omit()
+
+vif_model  <- lm(Intention_Scale ~ Attitude_Scale + Norm_Scale + PBC_Scale + PlaceID_Scale,
+                 data = vif_data)
+vif_values <- car::vif(vif_model)
+
+knitr::kable(round(vif_values, 3))
+write.csv(data.frame(Predictor = names(vif_values), VIF = round(vif_values, 3)),
+          here("outputs", "09_vif.csv"), row.names = FALSE)
+```
+
+All VIF values are below `r round(max(vif_values), 2)`; multicollinearity is not a concern.
+
+# Structural Model (Main Model)
+
+## Model Specification
+
+The main model follows the TPB (Ajzen, 2020): place identity is a background
+factor that acts on intention **only through the beliefs**.
+
+    place identity -> 11 beliefs -> attitude / norm / PBC -> intention
+
+- **H1–H3:** intention is predicted by attitude, norm, PBC (paths `b1`–`b3`).
+- **H4:** place identity predicts each belief (paths `c1`–`c11`). It has no
+  direct path to the constructs or to intention.
+- **Beliefs -> constructs:** every belief predicts all three constructs
+  (paths `d<k>_<j>`, k = construct, j = belief).
+- **Beliefs are endogenous.** Their residual covariances are freed (lavaan does
+  not estimate them automatically for endogenous variables). Because no
+  observed exogenous predictor is left, lavaan keeps all cases (FIML).
+- **Residual correlations** between the three constructs (Ajzen, 2020).
+- **Indirect effects:** `ind_<j>_<k> := c<j> * d<k>_<j> * b<k>` (through belief
+  j and construct k), `indb_<j>` (belief j, summed over constructs) and
+  `total_indirect` (all paths).
+
+One function builds the syntax for all variants used below, so that the models
+differ only in the options given.
+
+```{r define_main_model}
+beliefs <- c("Gewichtete_BB_Preis", "Gewichtete_BB_Klima",
+             "Gewichtete_BB_Preisstabili", "Gewichtete_BB_Unabh",
+             "NB_Fam", "NB_UmM", "NB_Freunde", "NB_Gen",
+             "Gewichtete_CB_Preis", "Gewichtete_CB_Aufwand", "Gewichtete_CB_Foerder")
+constructs <- c("Attitude", "Norm", "PBC_Scale")
+j_idx <- seq_along(beliefs)
+k_idx <- seq_along(constructs)
+
+# index -> belief name (labels in the model syntax use the index)
+label_key <- data.frame(j = j_idx, belief = beliefs)
+print(label_key)
+
+# direct = TRUE : adds direct paths place identity -> constructs (a1-a3)
+# controls = TRUE: adds age (10-year groups, in decades) and gender (female = 1) as predictors of
+#                  intention, constructs, beliefs and place identity
+build_model <- function(direct = FALSE, controls = FALSE) {
+  syn_c  <- paste0(beliefs, " ~ c", j_idx, "*PlaceID", collapse = "\n")
+  syn_d  <- sapply(k_idx, function(k)
+    paste0(constructs[k], " ~ ",
+           paste0("d", k, "_", j_idx, "*", beliefs, collapse = " + ")))
+  syn_rescov <- paste(combn(beliefs, 2, function(x) paste(x[1], "~~", x[2])),
+                      collapse = "\n")
+  syn_ind    <- unlist(lapply(j_idx, function(j)
+    sapply(k_idx, function(k)
+      sprintf("ind_%d_%d := c%d * d%d_%d * b%d", j, k, j, k, j, k))))
+  syn_indb   <- sapply(j_idx, function(j)
+    sprintf("indb_%d := %s", j, paste0("ind_", j, "_", k_idx, collapse = " + ")))
+  syn_total  <- paste("total_indirect :=", paste0("indb_", j_idx, collapse = " + "))
+
+  parts <- c(
+    "Attitude  =~ GB_AtGu + GB_AtAt + GB_AtGuen",
+    "Norm      =~ GB_NormSup + GB_NormSelf",
+    "Intention =~ GB_Int1 + GB_Int2 + GB_Int3",
+    "PlaceID   =~ PlaceID1 + PlaceID2 + PlaceID3",
+    "Intention ~ b1*Attitude + b2*Norm + b3*PBC_Scale",
+    syn_c,
+    paste(syn_d, collapse = "\n"),
+    "Attitude ~~ Norm",
+    "Attitude ~~ PBC_Scale",
+    "Norm     ~~ PBC_Scale",
+    syn_rescov,
+    paste(syn_ind, collapse = "\n"),
+    paste(syn_indb, collapse = "\n"),
+    syn_total
+  )
+  if (direct) {
+    parts <- c(parts, "Attitude  ~ a1*PlaceID", "Norm      ~ a2*PlaceID",
+               "PBC_Scale ~ a3*PlaceID")
+  }
+  if (controls) {
+    parts <- c(parts,
+               paste0(c("Intention", constructs, "PlaceID", beliefs),
+                      " ~ Age_dec + female", collapse = "\n"))
+  }
+  paste(parts, collapse = "\n")
+}
+
+model_main        <- build_model()
+model_main_direct <- build_model(direct = TRUE)
+```
+
+## Model Estimation
+
+MLR with FIML (`missing = "ml"`).
+
+```{r estimate_main_model}
+fit_main        <- sem(model_main,        data = data, missing = "ml", estimator = "MLR")
+fit_main_direct <- sem(model_main_direct, data = data, missing = "ml", estimator = "MLR")
+saveRDS(fit_main,        here("outputs", "10_sem_main.rds"))
+saveRDS(fit_main_direct, here("outputs", "10_sem_main_direct.rds"))
+
+cat("Cases in sample:", nrow(data), "\n")
+cat("Cases used in the SEM:", lavInspect(fit_main, "nobs"), "\n")
+```
+
+## Model Fit
+
+```{r main_fit}
+fit_idx <- c("chisq.scaled", "df.scaled", "pvalue.scaled",
+             "cfi.robust", "tli.robust", "rmsea.robust",
+             "rmsea.ci.lower.robust", "rmsea.ci.upper.robust", "srmr")
+
+fit_main_indices <- fitMeasures(fit_main, fit_idx)
+knitr::kable(round(fit_main_indices, 3))
+write.csv(data.frame(Index = names(fit_main_indices), Value = as.numeric(fit_main_indices)),
+          here("outputs", "10_main_fit.csv"), row.names = FALSE)
+```
+
+### Is the belief route sufficient?
+
+Comparison with the model that adds direct paths from place identity to the
+three constructs (`fit_main_direct`). A non-significant scaled chi-square
+difference means the direct paths are not needed.
+
+```{r main_direct_test}
+lavTestLRT(fit_main, fit_main_direct)
+```
+
+## Path Coefficients (Section 5.4.1–5.4.3, Figure 2)
+
+Standardized coefficients of all structural paths.
+
+```{r main_paths}
+sig_stars <- function(p) case_when(p < 0.001 ~ "***", p < 0.01 ~ "**", p < 0.05 ~ "*", TRUE ~ "")
+
+main_paths <- standardizedSolution(fit_main) %>%
+  filter(op == "~") %>%
+  select(lhs, rhs, est.std, se, z, pvalue, ci.lower, ci.upper) %>%
+  mutate(sig = sig_stars(pvalue), across(where(is.numeric), ~round(., 3)))
+
+write.csv(main_paths, here("outputs", "11_main_path_coefficients.csv"), row.names = FALSE)
+```
+
+### Core TPB paths (H1–H3)
+
+```{r main_paths_core}
+knitr::kable(main_paths %>% filter(lhs == "Intention") %>%
+               select(lhs, rhs, est.std, se, pvalue, sig))
+```
+
+### Place identity -> beliefs (H4, paths c1–c11)
+
+```{r main_paths_placeid}
+knitr::kable(main_paths %>% filter(rhs == "PlaceID", lhs %in% beliefs) %>%
+               select(belief = lhs, est.std, se, pvalue, sig) %>%
+               arrange(desc(est.std)))
+```
+
+### Beliefs -> constructs (exploratory)
+
+```{r main_paths_beliefs}
+belief_paths <- main_paths %>% filter(lhs %in% constructs, rhs %in% beliefs) %>%
+  arrange(lhs, rhs)
+
+knitr::kable(belief_paths %>% select(lhs, rhs, est.std, se, pvalue, sig))
+write.csv(belief_paths, here("outputs", "11_main_belief_paths.csv"), row.names = FALSE)
+```
+
+## Explained Variance (Figure 2)
+
+R² of intention, the three constructs and the beliefs.
+
+```{r main_r2}
+r2_main <- lavInspect(fit_main, "rsquare")[c("Intention", constructs, beliefs)]
+r2_table <- data.frame(Variable = names(r2_main), R2 = round(r2_main, 3))
+
+knitr::kable(r2_table, row.names = FALSE)
+write.csv(r2_table, here("outputs", "11_main_r_squared.csv"), row.names = FALSE)
+```
+
+## Indirect Effects of Place Identity (H4, Section 5.4.3)
+
+Total indirect effect and the indirect effect per belief (summed over the three
+constructs). Two sets of results:
+
+1. Delta method (from the main fit, robust standard errors).
+2. Percentile bootstrap, 1000 draws. A product of coefficients is not normally
+   distributed, so the bootstrap interval is the primary criterion: an indirect
+   effect is supported if its 95% interval does not include zero. Estimator
+   `ML` is required for bootstrap standard errors in lavaan; MLR has the same
+   point estimates. Runtime: several minutes.
+
+```{r main_indirect}
+indirect_delta <- parameterEstimates(fit_main, standardized = TRUE) %>%
+  filter(op == ":=", grepl("^(indb_|total_indirect)", label)) %>%
+  select(label, est, std.all, se, pvalue)
+
+set.seed(12345)
+fit_main_boot <- sem(model_main, data = data, missing = "ml", estimator = "ML",
+                     se = "bootstrap", bootstrap = 1000)
+saveRDS(fit_main_boot, here("outputs", "11_sem_main_bootstrap.rds"))
+cat("Successful bootstrap draws:", nrow(lavInspect(fit_main_boot, "boot")), "of 1000\n")
+
+indirect_boot <- parameterEstimates(fit_main_boot, boot.ci.type = "perc") %>%
+  filter(op == ":=", grepl("^(indb_|total_indirect)", label)) %>%
+  select(label, ci.lower, ci.upper)
+
+indirect_main <- indirect_delta %>%
+  left_join(indirect_boot, by = "label") %>%
+  mutate(j = suppressWarnings(as.integer(sub("indb_", "", label)))) %>%
+  left_join(label_key, by = "j") %>%
+  mutate(effect = ifelse(is.na(belief), "TOTAL", belief),
+         zero_excluded = ci.lower > 0 | ci.upper < 0,
+         across(where(is.numeric), ~round(., 3))) %>%
+  select(effect, est, std.all, se, pvalue, ci.lower, ci.upper, zero_excluded)
+
+knitr::kable(indirect_main,
+             caption = "Indirect effects of place identity on intention via beliefs (est = unstandardized)")
+write.csv(indirect_main, here("outputs", "11_main_indirect_effects.csv"), row.names = FALSE)
+```
+
+# Earlier Specification: Place Identity Predicts the Constructs
+
+Earlier specification (reported in the paper for comparison). Place identity
+predicts attitude, norm and PBC directly; the 11 beliefs enter as separate
+exogenous predictors. This simplifies the TPB: the belief level is not part of
+the place identity pathway. Because the beliefs are observed exogenous
+predictors (`fixed.x = TRUE`), lavaan drops cases with a missing belief score,
+which is why N is smaller than in the main model.
+
+```{r alt_model}
+belief_rhs <- paste(beliefs, collapse = " + ")
+
+model_alt <- paste0('
+  Attitude  =~ GB_AtGu + GB_AtAt + GB_AtGuen
+  Norm      =~ GB_NormSup + GB_NormSelf
+  Intention =~ GB_Int1 + GB_Int2 + GB_Int3
+  PlaceID   =~ PlaceID1 + PlaceID2 + PlaceID3
+
+  Intention ~ b1*Attitude + b2*Norm + b3*PBC_Scale
+
+  Attitude  ~ a1*PlaceID
+  Norm      ~ a2*PlaceID
+  PBC_Scale ~ a3*PlaceID
+
+  Attitude  ~ ', belief_rhs, '
+  Norm      ~ ', belief_rhs, '
+  PBC_Scale ~ ', belief_rhs, '
+
+  Attitude ~~ Norm
+  Attitude ~~ PBC_Scale
+  Norm     ~~ PBC_Scale
+
+  ind_att        := a1 * b1
+  ind_norm       := a2 * b2
+  ind_pbc        := a3 * b3
+  total_indirect := ind_att + ind_norm + ind_pbc
+')
+
+fit_alt <- sem(model_alt, data = data, missing = "ml", estimator = "MLR")
+saveRDS(fit_alt, here("outputs", "12_sem_alt.rds"))
+
+cat("Cases with a missing belief score:", sum(!complete.cases(data[, beliefs])), "\n")
+cat("Cases used in the SEM:", lavInspect(fit_alt, "nobs"), "\n")
+
+alt_fit <- fitMeasures(fit_alt, fit_idx)
+knitr::kable(round(alt_fit, 3))
+write.csv(data.frame(Index = names(alt_fit), Value = as.numeric(alt_fit)),
+          here("outputs", "12_alt_fit.csv"), row.names = FALSE)
+```
+
+## Paths, R² and Indirect Effects
+
+```{r alt_results}
+alt_paths <- standardizedSolution(fit_alt) %>%
+  filter(op == "~", lhs == "Intention" | rhs == "PlaceID") %>%
+  select(lhs, rhs, est.std, se, pvalue) %>%
+  mutate(sig = sig_stars(pvalue), across(where(is.numeric), ~round(., 3)))
+knitr::kable(alt_paths)
+
+cat("R² intention:", round(lavInspect(fit_alt, "rsquare")["Intention"], 3), "\n")
+
+# Delta method
+alt_indirect <- parameterEstimates(fit_alt, standardized = TRUE) %>%
+  filter(op == ":=") %>%
+  select(label, est, std.all, se, pvalue) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+knitr::kable(alt_indirect, caption = "Earlier specification: indirect effects (delta method)")
+
+# Percentile bootstrap (estimator ML, see above)
+set.seed(12345)
+fit_alt_boot <- sem(model_alt, data = data, missing = "ml", estimator = "ML",
+                    se = "bootstrap", bootstrap = 1000)
+alt_boot <- parameterEstimates(fit_alt_boot, boot.ci.type = "perc") %>%
+  filter(op == ":=") %>%
+  select(label, est, ci.lower, ci.upper) %>%
+  mutate(zero_excluded = ci.lower > 0 | ci.upper < 0,
+         across(where(is.numeric), ~round(., 3)))
+knitr::kable(alt_boot, caption = "Earlier specification: indirect effects (bootstrap)")
+
+write.csv(alt_paths,    here("outputs", "12_alt_paths.csv"),          row.names = FALSE)
+write.csv(alt_indirect, here("outputs", "12_alt_indirect_delta.csv"), row.names = FALSE)
+write.csv(alt_boot,     here("outputs", "12_alt_indirect_boot.csv"),  row.names = FALSE)
+```
+
+## Why does the fit differ? (diagnostic)
+
+The earlier specification fits worse than the main model. A possible
+reason is that it does not model the relation between place identity and the
+beliefs. The residual correlations between the place identity items and the
+beliefs show whether this is the case (large absolute values = unexplained
+association).
+
+```{r alt_residuals}
+rc <- tryCatch(residuals(fit_alt, type = "cor")$cov, error = function(e) NULL)
+pid_items <- c("PlaceID1", "PlaceID2", "PlaceID3")
+if (!is.null(rc) && all(beliefs %in% colnames(rc))) {
+  knitr::kable(round(rc[pid_items, beliefs], 2))
+} else {
+  cat("Residual correlations for the beliefs are not available in this fit.\n")
+}
+```
+
+# Robustness Check: Demographic Controls (Section 5.4.4)
+
+Demographic effects were not part of the original analysis. This section tests
+whether age and gender change the results of the main model.
+
+- **Controls:** age (10-year groups, coded in decades) and gender (female = 1) predict intention, the
+  three constructs, place identity and all beliefs (`model_demo`).
+- **Sample:** respondents with valid age and binary gender only (`data_robust`;
+  "diverse" is excluded because the group is too small for a separate estimate).
+- **Reference:** the main model estimated on the same sample (`fit_base`), so
+  that differences are due to the controls and not to the changed sample.
+
+## Sample
+
+```{r robustness_data}
+data_robust <- data %>% filter(!is.na(female), !is.na(Age_dec))
+
+cat("Full sample:", nrow(data), "\n")
+cat("Excluded (diverse or missing gender/age):", nrow(data) - nrow(data_robust), "\n")
+cat("Robustness sample:", nrow(data_robust), "\n")
+```
+
+## Models and Estimation
+
+```{r robustness_models}
+model_demo <- build_model(controls = TRUE)
+
+fit_base <- sem(model_main, data = data_robust, missing = "ml", estimator = "MLR")
+fit_demo <- sem(model_demo, data = data_robust, missing = "ml", estimator = "MLR")
+saveRDS(fit_base, here("outputs", "13_sem_base.rds"))
+saveRDS(fit_demo, here("outputs", "13_sem_demo.rds"))
+
+nobs_table <- data.frame(
+  Model  = c("Main model (full sample)", "Reference (robustness sample)",
+             "With demographic controls"),
+  N_used = c(lavInspect(fit_main, "nobs"), lavInspect(fit_base, "nobs"),
+             lavInspect(fit_demo, "nobs"))
+)
+knitr::kable(nobs_table)
+write.csv(nobs_table, here("outputs", "13_robustness_nobs.csv"), row.names = FALSE)
+```
+
+## Comparison of Path Coefficients
+
+```{r robustness_paths}
+get_paths <- function(fit, suffix) {
+  standardizedSolution(fit) %>%
+    filter(op == "~", !(rhs %in% c("Age_dec", "female"))) %>%
+    select(lhs, rhs, est.std, pvalue) %>%
+    rename_with(~ paste0(.x, "_", suffix), c(est.std, pvalue))
+}
+
+path_comparison <- get_paths(fit_base, "base") %>%
+  full_join(get_paths(fit_demo, "demo"), by = c("lhs", "rhs")) %>%
+  mutate(diff_demo_base = est.std_demo - est.std_base,
+         sig_change     = (pvalue_base < .05) != (pvalue_demo < .05)) %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  arrange(lhs, rhs)
+
+knitr::kable(path_comparison,
+             caption = "Standardized paths without vs. with demographic controls")
+
+cat("\nLargest absolute change from controls:",
+    max(abs(path_comparison$diff_demo_base), na.rm = TRUE), "\n")
+cat("Paths changing significance (p < .05):",
+    sum(path_comparison$sig_change, na.rm = TRUE), "\n")
+
+if (any(path_comparison$sig_change, na.rm = TRUE)) {
+  knitr::kable(path_comparison %>% filter(sig_change) %>%
+                 select(lhs, rhs, est.std_base, pvalue_base, est.std_demo, pvalue_demo),
+               caption = "Paths whose significance changes")
+}
+
+write.csv(path_comparison, here("outputs", "13_robustness_path_comparison.csv"), row.names = FALSE)
+```
+
+## Demographic Effects
+
+`std.all` for age (continuous); `std.nox` for gender (binary, so the predictor
+is left unstandardized).
+
+```{r robustness_demo_effects}
+demo_effects <- parameterEstimates(fit_demo, standardized = TRUE) %>%
+  filter(op == "~", rhs %in% c("Age_dec", "female")) %>%
+  select(lhs, rhs, est, se, pvalue, std.all, std.nox) %>%
+  mutate(sig = sig_stars(pvalue), across(where(is.numeric), ~round(., 3))) %>%
+  arrange(rhs, lhs)
+
+knitr::kable(demo_effects, caption = "Effects of age (per decade) and gender (female = 1)")
+write.csv(demo_effects, here("outputs", "13_robustness_demo_effects.csv"), row.names = FALSE)
+```
+
+## Indirect Effects, R² and Model Fit
+
+Bootstrap intervals (1000 draws, estimator `ML`) for the total indirect effect
+with and without controls. Runtime: several minutes.
+
+```{r robustness_summary}
+boot_total <- function(model, d) {
+  set.seed(12345)
+  f <- sem(model, data = d, missing = "ml", estimator = "ML",
+           se = "bootstrap", bootstrap = 1000)
+  parameterEstimates(f, boot.ci.type = "perc") %>%
+    filter(op == ":=", label == "total_indirect") %>%
+    select(est, ci.lower, ci.upper)
+}
+
+indirect_comparison <- bind_rows(
+  boot_total(model_main, data_robust) %>% mutate(Model = "Reference (robustness sample)"),
+  boot_total(model_demo, data_robust) %>% mutate(Model = "With demographic controls")
+) %>%
+  mutate(zero_excluded = ci.lower > 0 | ci.upper < 0,
+         across(where(is.numeric), ~round(., 3)))
+
+knitr::kable(indirect_comparison, caption = "Total indirect effect of place identity (bootstrap)")
+write.csv(indirect_comparison, here("outputs", "13_robustness_indirect.csv"), row.names = FALSE)
+
+fits <- list(fit_main, fit_base, fit_demo)
+summary_table <- data.frame(
+  Model = c("Main model (full sample)", "Reference (robustness sample)",
+            "With demographic controls"),
+  N = sapply(fits, lavInspect, what = "nobs"),
+  R2_Intention = unname(sapply(fits, function(f) lavInspect(f, "rsquare")["Intention"])),
+  do.call(rbind, lapply(fits, fitMeasures, fit.measures = fit_idx[c(1:6, 9)]))
+) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+knitr::kable(summary_table, caption = "Sample size, R² of intention and model fit")
+write.csv(summary_table, here("outputs", "13_robustness_summary.csv"), row.names = FALSE)
+```
+
+# Session Information
+
+```{r session_info}
+sessionInfo()
+```
