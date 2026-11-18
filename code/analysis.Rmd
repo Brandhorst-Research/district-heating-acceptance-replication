@@ -25,14 +25,14 @@ Run the document from top to bottom. Every chunk saves its results to
 
 | Section of this document | Used in the paper |
 |---|---|
-| Data Preparation, Missing Data | 4.5 Data Analysis (MCAR test), 5.1 Sample Characteristics |
-| Scale Construction | 4.3 Questionnaire Development (weighted beliefs), 5.2 (PBC item decision) |
-| Descriptive Statistics, Reliability | 5.2–5.3, Table 1, Table 3 |
-| Confirmatory Factor Analysis | 5.2, Table 1 (CR, AVE), Table 2 |
-| Multicollinearity | 5.2, Table 1 (VIF) |
-| Structural Model (main model: place identity via beliefs) | 5.4–5.4.3, Figure 2 |
-| Earlier Specification (place identity -> constructs) | 5.4.3 (comparison) |
-| Robustness: Demographic Controls | 5.4.4 |
+| Data Preparation, Missing Data | Data analysis (MCAR test); Sample characteristics |
+| Scale Construction | Questionnaire development (weighted beliefs); Measurement model (PBC item decision) |
+| Descriptive Statistics, Reliability | Measurement model; Descriptive statistics and correlations; Tables 1 and 3 |
+| Confirmatory Factor Analysis | Measurement model; Table 1 (CR, AVE); Table 2 |
+| Multicollinearity | Measurement model; Table 1 (VIF) |
+| Structural Model (main model: place identity via beliefs) | Structural model; Figure 2 |
+| Earlier Specification (place identity -> constructs) | Place identity effects (comparison) |
+| Robustness: Demographic Controls | Robustness check: demographic controls |
 
 Data note: the questionnaire also contained an item on acceptable price premiums
 (`WVT`). It does not measure willingness to pay in an incentive-compatible way
@@ -103,7 +103,7 @@ saveRDS(data, here("data", "01_data_cleaned.rds"))
 
 Purpose: describe missingness and test whether it is completely at random
 (MCAR). The result supports the use of full-information ML in the SEM
-(Section 4.5).
+(see Data analysis in the manuscript).
 
 ## Variable Selection
 
@@ -604,7 +604,7 @@ difference means the direct paths are not needed.
 lavTestLRT(fit_main, fit_main_direct)
 ```
 
-## Path Coefficients (Section 5.4.1–5.4.3, Figure 2)
+## Path Coefficients (Structural model, Figure 2)
 
 Standardized coefficients of all structural paths.
 
@@ -656,7 +656,7 @@ knitr::kable(r2_table, row.names = FALSE)
 write.csv(r2_table, here("outputs", "11_main_r_squared.csv"), row.names = FALSE)
 ```
 
-## Indirect Effects of Place Identity (H4, Section 5.4.3)
+## Indirect Effects of Place Identity (H4, Place identity effects)
 
 Total indirect effect and the indirect effect per belief (summed over the three
 constructs). Two sets of results:
@@ -799,7 +799,7 @@ if (!is.null(rc) && all(beliefs %in% colnames(rc))) {
 }
 ```
 
-# Robustness Check: Demographic Controls (Section 5.4.4)
+# Robustness Check: Demographic Controls
 
 Demographic effects were not part of the original analysis. This section tests
 whether age and gender change the results of the main model.
