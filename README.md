@@ -2,7 +2,7 @@
 
 Replication materials for:
 
-Brandhorst, L. D. (2026). *Psychological Determinants of Renewable District Heating Acceptance: A Theory of Planned Behavior Study.* Manuscript submitted to *Energies*.
+Brandhorst, L. D. (2026). *Psychological Determinants of Renewable District Heating Acceptance: A Theory of Planned Behavior Study.
 
 ## Contents
 
