@@ -2,7 +2,7 @@
 
 Replication materials for:
 
-Brandhorst, L. D. (2026). *Psychological Determinants of Renewable District Heating Acceptance: A Theory of Planned Behavior Study.
+Brandhorst, L. D. *Psychological Determinants of Renewable District Heating Acceptance: A Theory of Planned Behavior Study*.
 
 ## Contents
 
@@ -24,15 +24,15 @@ Software used for the reported results: R 4.5.1, lavaan 0.6-20, semTools 0.5-7, 
 
 ## Analysis overview
 
-| Part of `analysis.Rmd` | Manuscript |
+| Part of `analysis.Rmd` | Manuscript (section, table, figure) |
 |---|---|
-| Data preparation, missing-data analysis (MCAR test) | Sections 4.5, 5.1 |
-| Scale construction (weighted beliefs, PBC item decision) | Sections 4.3, 5.2 |
-| Descriptive statistics, reliability, correlations | Sections 5.2–5.3, Tables 1 and 3 |
-| Confirmatory factor analysis, CR, AVE, VIF | Section 5.2, Tables 1 and 2 |
-| Structural model: place identity → beliefs → TPB constructs → intention | Sections 5.4–5.4.3, Figure 2 |
-| Earlier specification: place identity → TPB constructs (for comparison) | Section 5.4.3 |
-| Robustness check with age and gender as controls | Section 5.4.4 |
+| Data preparation, missing-data analysis (MCAR test) | Data analysis; Sample characteristics |
+| Scale construction (weighted beliefs, PBC item decision) | Questionnaire development; Measurement model |
+| Descriptive statistics, reliability, correlations | Measurement model; Descriptive statistics and correlations; Tables 1 and 3 |
+| Confirmatory factor analysis, CR, AVE, VIF | Measurement model; Tables 1 and 2 |
+| Structural model: place identity → beliefs → TPB constructs → intention | Structural model (incl. Place identity effects); Figure 2 |
+| Earlier specification: place identity → TPB constructs (for comparison) | Place identity effects |
+| Robustness check with age and gender as controls | Robustness check: demographic controls |
 
 ## Notes on the data
 
@@ -43,7 +43,7 @@ Software used for the reported results: R 4.5.1, lavaan 0.6-20, semTools 0.5-7, 
 
 ## License
 
-Code and data are released under the MIT License (see `LICENSE`).
+The code (`code/`) is released under the MIT License (see `LICENSE`). The data (`data/`) and the result files (`outputs/`) are released under the Creative Commons Attribution 4.0 International License (CC BY 4.0; see `data/LICENSE.md`).
 
 ## Contact
 
